@@ -3,6 +3,7 @@
 import os
 import re
 import urllib
+import hashlib
 from bs4 import BeautifulSoup
 
 
@@ -91,8 +92,16 @@ class Browser:
         artist_id = re.findall('(\d+)\.jpg', artist_id)
 
         self.current['artist_name'] = artists[int(artist_index)].text
-        self.current['playlist'] = artist_id[0]
-        self.playlist(artist_id[0])
+
+        if not artist_id:
+            # page = self.get(self.base_url + artists[int(artist_index)]['href'])
+            self.genres()
+            pass
+            # bail
+        artist_id = artist_id[0]
+
+        self.current['playlist'] = artist_id
+        self.playlist(artist_id)
 
     def playlist(self, artist_id, song_id=None):
         os.system('clear')
@@ -121,6 +130,11 @@ class Browser:
         song_link = songs[int(song_index)]['url']
         self.current['song_name'] = songs[int(song_index)]['name']
 
-        self.player.ui_update_status('fetching song...')
-        urllib.urlretrieve(song_link, self.player.config['cache_dir'] + '/tmp.flv')
-        self.player.run()
+        song_name_encoded = self.current['song_name'].encode('utf-8')
+        song_hash = hashlib.sha1(song_name_encoded).hexdigest()
+
+        file_id = self.player.config['cache_dir'] + '/' + artist_id + '-' + song_hash
+        if not os.path.exists(file_id + '.mp3'):
+            self.player.ui_update_status('fetching song...')
+            urllib.urlretrieve(song_link, file_id + '.flv')
+        self.player.run(file_id)

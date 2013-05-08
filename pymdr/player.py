@@ -1,40 +1,22 @@
 # -*- coding: utf-8 -*-
 
+import os
 import browser
-import pyaudio
-import wave
+import pyglet
+
 import sh
 import datetime
-from time import sleep
-from ctypes import *
-
-# From alsa-lib Git 3fd4ab9be0db7c7430ebd258f2717a976381715d
-ERROR_HANDLER_FUNC = CFUNCTYPE(None, c_char_p, c_int, c_char_p, c_int, c_char_p)
-
-
-def py_error_handler(*arg):
-    # eh.
-    pass
-
-c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
-
-asound = cdll.LoadLibrary('libasound.so')
-
-# Set error handler
-asound.snd_lib_error_set_handler(c_error_handler)
-
-# todo: move to config
-CHUNK = 1024
-
 
 class Player:
-    def __init__(self):
+    def __init__(self, config=None):
         self.config = {
             'cache_dir': 'cache'
         }
         self.browser = browser.Browser(self)
+        self.ui_create()
+        self.load_config(config)
 
-    def load_config(self):
+    def load_config(self, config):
         pass
         # self.ui_update_status('loading config (not implemented)')
 
@@ -52,43 +34,63 @@ class Player:
         with self.ui.location(self.ui.width-len(text)-1, self.ui.height - 2):
             print text
 
-    def run(self):
+    def ui_update_progress(self, progress):
+        if progress is 0:
+            pass
 
-        p = pyaudio.PyAudio()
-        self.time = 0
+        with self.ui.location(0, self.ui.height - 3):
+            width = self.ui.width / 3
+            print '[{0}{1}]'.format('#' * int(width * progress), ' ' * int(width - (width * progress)))
 
-        self.ui_update_status('converting to wav')
-        convert = sh.ffmpeg(
-            '-i', self.config['cache_dir'] + '/tmp.flv',
-            '-f', 'wav', self.config['cache_dir'] + '/tmp',
-            '-y')
-        convert.wait()
-        self.ui_update_status('loading wav')
-        wf = wave.open(self.config['cache_dir'] + '/tmp', 'rb')
 
-        def callback(in_data, frame_count, time_info, status):
-            data = wf.readframes(frame_count)
-            return (data, pyaudio.paContinue)
+    def on_eos(self):
+        pass
+        # if self.player.playing:
+        #     print 'pause'
+        # else:
+        #     print 'play'
 
-        stream = p.open(format=p.get_format_from_width(wf.getsampwidth()),
-                        channels=wf.getnchannels(),
-                        rate=wf.getframerate(),
-                        output=True,
-                        stream_callback=callback)
-
-        self.ui_update_status('playing')
-        stream.start_stream()
-
-        while stream.is_active():
-            self.ui_update_status('playing ' + str(datetime.timedelta(seconds=round(self.time))))
-            self.ui_update_current_song(self.browser.current['artist_name'] + ' - ' + self.browser.current['song_name'])
-            sleep(0.1)
-            self.time += 0.1
-
-        stream.stop_stream()
+    def exit_callback(self, dt):
+        self.player.stop()
+        pyglet.clock.unschedule(self.timer_callback)
+        pyglet.clock.unschedule(self.exit_callback)
+        self.player._sources = []
+        # todo: use self.player._sources correctly - queue playlist in sources
         self.ui_update_status('stopped')
-        stream.close()
-        wf.close()
-
-        p.terminate()
         self.browser.run()
+
+    def timer_callback(self, dt):
+        self.ui_update_status(
+            'playing ' + str(datetime.timedelta(seconds=round(self.player._get_time()))) + '/' +
+            str(datetime.timedelta(seconds=round(self.player.source.duration)))
+        )
+        self.ui_update_current_song(self.browser.current['artist_name'] + ' - ' + self.browser.current['song_name'])
+        self.ui_update_progress(float(self.player._get_time()) / float(self.player.source.duration))
+
+    def run(self, file_id):
+        # todo: reuse player instance (start in __init__), use queue and pyglet.media.Player()
+        pyglet.app.exit()
+        self.player = pyglet.media.ManagedSoundPlayer()
+        self.player.push_handlers(self)
+        # self.player.eos_action = self.player.EOS_PAUSE
+
+        if not os.path.exists(file_id + '.mp3'):
+            self.ui_update_status('converting to mp3')
+            convert = sh.ffmpeg(
+                '-i', file_id + '.flv',
+                '-f', 'mp3', file_id + '.mp3',
+                '-y')
+            convert.wait()
+            os.remove(file_id + '.flv')
+
+        self.ui_update_status('loading mp3')
+        self.source = pyglet.media.load(file_id + '.mp3')
+        pyglet.clock.schedule_once(self.exit_callback, self.source.duration)
+        pyglet.clock.schedule_interval_soft(self.timer_callback, 0.1)
+
+        self.player.queue(self.source)
+        self.ui_update_status('playing')
+
+        self.player.play()
+        pyglet.app.run()
+        pyglet.app.exit()
